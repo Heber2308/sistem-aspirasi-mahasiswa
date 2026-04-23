@@ -488,11 +488,13 @@ def open_browser():
         print(f'⚠️  Browser tidak bisa dibuka otomatis')
         print(f'📍 Silakan buka manual: {url}')
 
+with app.app_context():
+    init_database()
 
 # ========== RUN APLIKASI ==========
 if __name__ == '__main__':
     # Inisialisasi database
-    init_database()
+    # init_database()
     
     # Jalankan aplikasi
     # Production: debug=False, Development: debug=False (MATIKAN DEBUG MODE)
