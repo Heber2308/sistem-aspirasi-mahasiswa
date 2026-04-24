@@ -308,15 +308,43 @@ class SentimentAnalyzer:
         # Simpan classes untuk digunakan di predict
         self.classes_ = np.unique(y)
         
+        # 🔥 TAMBAHKAN: Cek distribusi kelas
+        from collections import Counter
+        label_counts = Counter(y)
+        print(f"📊 Distribusi kelas: {label_counts}")
+        
+        # 🔥 TAMBAHKAN: Filter kelas yang kurang dari 2 sampel
+        min_count = min(label_counts.values())
+        if min_count < 2:
+            print(f"⚠️  Terdeteksi kelas dengan {min_count} sampel!")
+            print("   Melakukan filtering data...")
+            
+            # Filter kelas yang memiliki minimal 2 sampel
+            valid_classes = [cls for cls, count in label_counts.items() if count >= 2]
+            valid_indices = [i for i, label in enumerate(y) if label in valid_classes]
+            
+            processed_texts = [processed_texts[i] for i in valid_indices]
+            X = self.vectorizer.fit_transform(processed_texts)
+            y = y[valid_indices]
+            
+            print(f"📊 Setelah filtering: {Counter(y)}")
+        
         # Feature selection: pilih top 2000 features dengan chi2 score tertinggi
         print("🔍 Melakukan feature selection...")
         self.feature_selector = SelectKBest(chi2, k=min(2000, X.shape[1]))
         X_selected = self.feature_selector.fit_transform(X, y)
         
-        # Split data dengan stratification
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_selected, y, test_size=0.2, random_state=42, stratify=y
-        )
+        # 🔥 MODIFIKASI: Cek apakah stratify bisa digunakan
+        if min(Counter(y).values()) >= 2:
+            print("✅ Menggunakan stratified split")
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_selected, y, test_size=0.2, random_state=42, stratify=y
+            )
+        else:
+            print("⚠️  Tidak bisa stratifikasi, menggunakan split biasa")
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_selected, y, test_size=0.2, random_state=42
+            )
         
         # Training model Multinomial Naive Bayes
         print("🤖 Melatih Multinomial Naive Bayes dengan alpha=0.1...")
