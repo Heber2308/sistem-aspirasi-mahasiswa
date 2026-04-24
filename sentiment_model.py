@@ -18,23 +18,34 @@ import nltk
 nltk.download('stopwords')
 
 class SentimentAnalyzer:
-    """Kelas untuk analisis sentimen menggunakan Naïve Bayes"""
+    """Kelas untuk analisis sentimen menggunakan Naïve Bayes dengan Negation Handling"""
     
     def __init__(self):
         # TF-IDF dengan optimasi parameter
         self.vectorizer = TfidfVectorizer(
-            max_features=3000,  # Kurangi features untuk menghindari overfitting
-            ngram_range=(1, 2),
-            min_df=2,  # Ignore terlalu jarang
-            max_df=0.95,  # Ignore terlalu sering
-            sublinear_tf=True  # Sublinear TF scaling
+            max_features=5000,  # Naikkan karena ada fitur negasi
+            ngram_range=(1, 3),  # Unigram, Bigram, Trigram untuk tangkap "tidak_bagus"
+            min_df=2,
+            max_df=0.95,
+            sublinear_tf=True
         )
         # Multinomial Naive Bayes dengan alpha tuning
-        self.classifier = MultinomialNB(alpha=0.1)  # Optimal alpha
-        self.feature_selector = None  # Feature selection
+        self.classifier = MultinomialNB(alpha=0.1)
+        self.feature_selector = None
         self.stemmer = StemmerFactory().create_stemmer()
         self.stop_words = set(stopwords.words('indonesian'))
-        self.classes_ = None  # Untuk menyimpan label classes
+        self.classes_ = None
+        
+        # ========== KATA NEGASI (DITAMBAHKAN) ==========
+        self.negation_words = {
+            'tidak', 'bukan', 'gak', 'nggak', 'ngga', 'ga', 'tak',
+            'jangan', 'belum', 'blm', 'kurang', 'tdk', 'td',
+            'tanpa', 'tiada', 'jgn'
+        }
+        
+        # ========== KATA PENGUAT/PENGEBAL NEGASI ==========
+        # Kata-kata yang memutus rantai negasi (tanda baca, konjungsi)
+        self.negation_stoppers = {'.', ',', '!', '?', ';', ':', 'dan', 'atau', 'tetapi', 'tapi', 'tp', 'sementara', 'sedangkan'}
         
         # Kamus normalisasi kata tidak baku
         self.normalization_dict = {
@@ -74,13 +85,73 @@ class SentimentAnalyzer:
         # Hapus angka
         text = re.sub(r'\d+', '', text)
         
-        # Hapus tanda baca
-        text = text.translate(str.maketrans('', '', string.punctuation))
+        # Hapus tanda baca (KECUALI yang penting untuk negasi stopper)
+        # Simpan beberapa tanda baca sebagai pemutus negasi
+        text = re.sub(r'[^\w\s,.;:!?]', '', text)
         
         # Hapus spasi berlebih
         text = ' '.join(text.split())
         
         return text
+    
+    # ========== METHOD HANDLE NEGATION (BARU DITAMBAHKAN) ==========
+    def handle_negation(self, text):
+        """
+        Menangani negasi dengan menambahkan prefix NOT_ pada kata setelah kata negasi.
+        Contoh: 'tidak bagus' -> 'tidak NOT_bagus'
+        """
+        words = text.split()
+        result = []
+        negate = False
+        
+        for i, word in enumerate(words):
+            # Cek apakah kata ini pemutus negasi
+            if word in self.negation_stoppers:
+                negate = False
+                result.append(word)
+                continue
+            
+            # Cek apakah ini kata negasi
+            if word in self.negation_words:
+                negate = True
+                result.append(word)
+                continue
+            
+            # Jika mode negasi aktif, tambahkan prefix NOT_
+            if negate:
+                result.append(f"NOT_{word}")
+            else:
+                result.append(word)
+        
+        return ' '.join(result)
+    
+    # ========== METHOD HANDLE DOUBLE NEGATION (TAMBAHAN) ==========
+    def handle_double_negation(self, text):
+        """
+        Menangani negasi ganda: 'tidak tidak bagus' -> 'tidak NOT_bagus'
+        Menghilangkan double negation yang membingungkan
+        """
+        words = text.split()
+        result = []
+        prev_negation = False
+        
+        for word in words:
+            if word in self.negation_words:
+                if prev_negation:
+                    # Double negation, skip yang pertama (atau kedua)
+                    result.append(word)  # Simpan satu saja
+                    prev_negation = False
+                else:
+                    prev_negation = True
+                    result.append(word)
+            else:
+                if prev_negation:
+                    result.append(f"NOT_{word}")
+                    prev_negation = False  # Reset setelah satu kata? Atau terus?
+                else:
+                    result.append(word)
+        
+        return ' '.join(result)
     
     def normalize_text(self, text):
         """Normalisasi kata tidak baku"""
@@ -89,21 +160,43 @@ class SentimentAnalyzer:
         return ' '.join(normalized_words)
     
     def remove_stopwords(self, text):
-        """Menghapus stopwords"""
+        """Menghapus stopwords TAPI HATI-HATI: jangan hapus kata negasi!"""
         words = text.split()
-        filtered_words = [word for word in words if word not in self.stop_words]
+        # JANGAN HAPUS kata yang mengandung prefix NOT_ (hasil negasi handling)
+        # JANGAN HAPUS kata negasi
+        filtered_words = []
+        for word in words:
+            # Simpan kata negasi dan kata dengan prefix NOT_
+            if word in self.negation_words or word.startswith('NOT_'):
+                filtered_words.append(word)
+            # Hapus stopwords biasa
+            elif word not in self.stop_words:
+                filtered_words.append(word)
         return ' '.join(filtered_words)
     
     def stem_text(self, text):
-        """Stemming ke kata dasar"""
+        """Stemming ke kata dasar TAPI HATI-HATI: jangan stem kata negasi!"""
         words = text.split()
-        stemmed_words = [self.stemmer.stem(word) for word in words]
+        stemmed_words = []
+        for word in words:
+            # Jangan stem kata negasi dan kata dengan prefix NOT_
+            if word in self.negation_words:
+                stemmed_words.append(word)
+            elif word.startswith('NOT_'):
+                # Stem bagian setelah NOT_
+                original_word = word[4:]  # Hapus "NOT_"
+                stemmed_word = self.stemmer.stem(original_word)
+                stemmed_words.append(f"NOT_{stemmed_word}")
+            else:
+                stemmed_words.append(self.stemmer.stem(word))
         return ' '.join(stemmed_words)
     
     def preprocess(self, text):
-        """Preprocessing teks secara lengkap"""
+        """Preprocessing teks secara lengkap DENGAN NEGATION HANDLING"""
         text = self.clean_text(text)
         text = self.normalize_text(text)
+        # ======== HANDLE NEGATION SEBELUM STOPWORDS & STEMMING ========
+        text = self.handle_negation(text)
         text = self.remove_stopwords(text)
         text = self.stem_text(text)
         return text
@@ -113,7 +206,7 @@ class SentimentAnalyzer:
         # Preprocessing semua teks
         processed_texts = [self.preprocess(text) for text in texts]
         
-        # Ekstraksi fitur dengan TF-IDF (dengan optimasi)
+        # Ekstraksi fitur dengan TF-IDF
         X = self.vectorizer.fit_transform(processed_texts)
         y = np.array(labels)
         
@@ -130,7 +223,7 @@ class SentimentAnalyzer:
             X_selected, y, test_size=0.2, random_state=42, stratify=y
         )
         
-        # Training model Multinomial Naive Bayes (dengan alpha optimal)
+        # Training model Multinomial Naive Bayes
         print("🤖 Melatih Multinomial Naive Bayes dengan alpha=0.1...")
         self.classifier.fit(X_train, y_train)
         
@@ -189,6 +282,22 @@ class SentimentAnalyzer:
                 'negatif': probabilities_dict.get('negatif', 0)
             }
         }
+    
+    # ========== METHOD DEBUGGING NEGATION (TAMBAHAN) ==========
+    def debug_preprocess(self, text):
+        """Menampilkan langkah-langkah preprocessing untuk debugging"""
+        print(f"Original: {text}")
+        cleaned = self.clean_text(text)
+        print(f"Cleaned: {cleaned}")
+        normalized = self.normalize_text(cleaned)
+        print(f"Normalized: {normalized}")
+        negated = self.handle_negation(normalized)
+        print(f"After Negation: {negated}")
+        stopwords_removed = self.remove_stopwords(negated)
+        print(f"Stopwords Removed: {stopwords_removed}")
+        stemmed = self.stem_text(stopwords_removed)
+        print(f"Stemmed: {stemmed}")
+        return stemmed
     
     def save_model(self, path='model/naive_bayes.pkl'):
         """Menyimpan model ke file"""
@@ -356,7 +465,7 @@ def load_training_data_from_csv(csv_path='training_data.csv'):
         return get_initial_training_data()
 
 
-# Contoh data training awal (fallback jika CSV tidak ada) - DIPERKAYA dengan 300+ data
+# Contoh data training awal (fallback jika CSV tidak ada) - DIPERKAYA dengan data negasi
 def get_initial_training_data():
     """Mendapatkan data training default yang diperkaya untuk pembelajaran lebih cepat"""
     texts = []
@@ -397,7 +506,7 @@ def get_initial_training_data():
         "alumni network solid", "student exchange program bagus", "lapangan pekerjaan terbuka luas"
     ]
     
-    # ========== SENTIMEN NEGATIF (100+ data) ==========
+    # ========== SENTIMEN NEGATIF (100+ data) DENGAN NEGASI ==========
     negatif_texts = [
         # Akademik
         "krs error terus tidak bisa diakses", "dosen tidak masuk tanpa kabar", "materi kuliah terlalu sulit",
@@ -405,6 +514,15 @@ def get_initial_training_data():
         "sistem penilaian tidak jelas", "bimbingan akademik tidak optimal", "e-learning sering error",
         "dosen sering terlambat", "tugas menumpuk dan tidak proporsional", "sistem KRS lambat",
         "nilai keluar lambat", "transkrip nilai sering salah", "mata kuliah tidak tersedia",
+        
+        # ===== DATA DENGAN NEGASI (TAMBAHAN PENTING) =====
+        "dosen tidak bagus mengajar", "materi tidak bagus dan sulit", "sistem tidak bagus dan error",
+        "pelayanan tidak bagus", "fasilitas tidak bagus", "wifi tidak bagus dan lambat",
+        "aplikasi tidak bagus", "ruang kelas tidak bagus", "laboratorium tidak bagus",
+        "kantin tidak bagus dan kotor", "bimbingan tidak bagus", "jadwal tidak bagus",
+        "metode tidak bagus", "kurikulum tidak bagus", "perpustakaan tidak bagus",
+        "tidak bagus sama sekali", "gak bagus pelayanannya", "nggak bagus aplikasinya",
+        "bukan solusi yang bagus", "belum bagus sistemnya", "jangan kasih yang tidak bagus",
         
         # Administrasi
         "pelayanan lambat dan tidak responsif", "proses daftar ulang ribet", "pembayaran UKT sulit",
