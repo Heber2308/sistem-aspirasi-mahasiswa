@@ -18,13 +18,13 @@ import nltk
 nltk.download('stopwords')
 
 class SentimentAnalyzer:
-    """Kelas untuk analisis sentimen menggunakan Naïve Bayes dengan Negation Handling"""
+    """Kelas untuk analisis sentimen menggunakan Naïve Bayes dengan Sentiment-Aware Negation Handling"""
     
     def __init__(self):
         # TF-IDF dengan optimasi parameter
         self.vectorizer = TfidfVectorizer(
-            max_features=5000,  # Naikkan karena ada fitur negasi
-            ngram_range=(1, 3),  # Unigram, Bigram, Trigram untuk tangkap "tidak_bagus"
+            max_features=5000,
+            ngram_range=(1, 3),  # Unigram, Bigram, Trigram
             min_df=2,
             max_df=0.95,
             sublinear_tf=True
@@ -36,16 +36,61 @@ class SentimentAnalyzer:
         self.stop_words = set(stopwords.words('indonesian'))
         self.classes_ = None
         
-        # ========== KATA NEGASI (DITAMBAHKAN) ==========
+        # ========== KATA NEGASI ==========
         self.negation_words = {
             'tidak', 'bukan', 'gak', 'nggak', 'ngga', 'ga', 'tak',
             'jangan', 'belum', 'blm', 'kurang', 'tdk', 'td',
             'tanpa', 'tiada', 'jgn'
         }
         
-        # ========== KATA PENGUAT/PENGEBAL NEGASI ==========
-        # Kata-kata yang memutus rantai negasi (tanda baca, konjungsi)
-        self.negation_stoppers = {'.', ',', '!', '?', ';', ':', 'dan', 'atau', 'tetapi', 'tapi', 'tp', 'sementara', 'sedangkan'}
+        # ========== KATA SENTIMEN NEGATIF (BARU DITAMBAHKAN) ==========
+        # Kata-kata yang SUDAH bermakna negatif
+        self.negative_sentiment_words = {
+            'buruk', 'jelek', 'berantakan', 'rusak', 'error', 'lemot',
+            'sulit', 'susah', 'ribet', 'lambat', 'lamban', 'kotor',
+            'bising', 'panas', 'pengap', 'sempit', 'kumuh', 'bau',
+            'kecewa', 'mengecewakan', 'parah', 'payah', 'aneh', 'anehnya',
+            'bangkai', 'bego', 'bodoh', 'brengsek', 'busuk',
+            'cacat', 'capek', 'cerewet', 'culas',
+            'jorok', 'joroknya',
+            'kampungan', 'kacau', 'kaku', 'kasar', 'kurangajar',
+            'mahal', 'malas', 'membosankan', 'mengerikan', 'menjengkelkan',
+            'menyebalkan', 'murahan', 'murahan',
+            'nakal', 'norak',
+            'sampah', 'sia', 'sia-sia', 'sombong', 'stress',
+            'tolol', 'tua',
+            'bermasalah', 'berantakan', 'bermasalah', 'berantakan',
+            'berantakan', 'berantakan', 'berantakan',
+            'tdk_bagus', 'tidak_bagus', 'gak_bagus', 'NOT_bagus'  # Variasi n-gram
+        }
+        
+        # ========== KATA SENTIMEN POSITIF (BARU DITAMBAHKAN) ==========
+        self.positive_sentiment_words = {
+            'bagus', 'baik', 'mantap', 'keren', 'oke', 'ok', 'sip',
+            'cepat', 'mudah', 'responsif', 'ramah', 'nyaman', 'bersih',
+            'lengkap', 'modern', 'inovatif', 'membantu', 'puas', 'memuaskan',
+            'luar_biasa', 'sangat_bagus', 'sangat_baik',
+            'aman', 'asyik', 'asik', 'asoy',
+            'baiknya', 'bangga', 'beken', 'benar', 'berhasil',
+            'cerdas', 'cakep', 'canggih', 'cemerlang', 'cocok',
+            'dermawan', 'detail',
+            'efektif', 'efisien', 'elegan', 'elite', 'enak',
+            'fantastis', 'favorit',
+            'gentle', 'gokil', 'gratis', 'gue_banget',
+            'halus', 'harmonis', 'hemat', 'hebat', 'heroik',
+            'ideal', 'indah', 'inovatif', 'intuitif', 'istimewa',
+            'jempol', 'jitu', 'juara',
+            'kaya', 'kebanggaan', 'kece', 'keren_abis', 'khas', 'kompeten',
+            'lancar', 'legendaris', 'luas',
+            'manis', 'menarik', 'menawan', 'mengesankan', 'mudah_digunakan',
+            'oke_banget', 'optimal',
+            'paten', 'peduli', 'pelayanan_prima', 'pintar', 'populer', 'profesional',
+            'rapi', 'rekomendasi', 'reliable', 'romantis', 'royal',
+            'sabar', 'sederhana', 'segar', 'sejuk', 'sempurna', 'sensasional', 'simpel',
+            'soft', 'solid', 'solutif', 'spesial', 'stabil', 'sukses', 'super',
+            'tanggap', 'tepat', 'terang', 'terbaik', 'terdepan', 'terjamin', 'terkenal',
+            'terpercaya', 'tersenyum', 'teruji', 'top', 'transparan'
+        }
         
         # Kamus normalisasi kata tidak baku
         self.normalization_dict = {
@@ -65,8 +110,31 @@ class SentimentAnalyzer:
             "tdk": "tidak", "td": "tidak",
             "blm": "belum", "dpt": "dapat",
             "jgn": "jangan", "hrs": "harus", "bsa": "bisa",
-            "sgt": "sangat", "cpt": "cepat", "lgs": "langsung"
+            "sgt": "sangat", "cpt": "cepat", "lgs": "langsung",
+            # Normalisasi kata negatif informal
+            "berantakan": "berantakan",
+            "brantakan": "berantakan",
+            "amburadul": "berantakan",
+            "berantaqan": "berantakan"
         }
+    
+    # ========== METHOD UNTUK DETEKSI SENTIMEN KATA ==========
+    def _is_negative_word(self, word):
+        """Cek apakah kata bermakna negatif"""
+        return word.lower() in self.negative_sentiment_words
+    
+    def _is_positive_word(self, word):
+        """Cek apakah kata bermakna positif"""
+        return word.lower() in self.positive_sentiment_words
+    
+    def _get_word_sentiment(self, word):
+        """Mendapatkan nilai sentimen kata"""
+        if self._is_positive_word(word):
+            return 'positif'
+        elif self._is_negative_word(word):
+            return 'negatif'
+        else:
+            return 'netral'
     
     def clean_text(self, text):
         """Membersihkan teks dari karakter yang tidak perlu"""
@@ -86,7 +154,6 @@ class SentimentAnalyzer:
         text = re.sub(r'\d+', '', text)
         
         # Hapus tanda baca (KECUALI yang penting untuk negasi stopper)
-        # Simpan beberapa tanda baca sebagai pemutus negasi
         text = re.sub(r'[^\w\s,.;:!?]', '', text)
         
         # Hapus spasi berlebih
@@ -94,60 +161,71 @@ class SentimentAnalyzer:
         
         return text
     
-    # ========== METHOD HANDLE NEGATION (BARU DITAMBAHKAN) ==========
+    # ========== METHOD HANDLE NEGATION (DIPERBAIKI) ==========
     def handle_negation(self, text):
         """
-        Menangani negasi dengan menambahkan prefix NOT_ pada kata setelah kata negasi.
-        Contoh: 'tidak bagus' -> 'tidak NOT_bagus'
+        Menangani negasi DENGAN MEMAHAMI SENTIMEN KATA.
+        
+        Logika:
+        - "tidak bagus" → "tidak NOT_bagus" (negasi + positif = negatif) ✅
+        - "tidak berantakan" → "tidak POSITIVE_berantakan" (negasi + negatif = positif) ✅
+        - "tidak jelek" → "tidak POSITIVE_jelek" ✅
+        - "tidak tidak bagus" → "tidak bagus" (double negation) ✅
         """
         words = text.split()
         result = []
-        negate = False
+        negation_active = False
         
         for i, word in enumerate(words):
-            # Cek apakah kata ini pemutus negasi
-            if word in self.negation_stoppers:
-                negate = False
+            # Cek double negation: "tidak tidak X"
+            if word in self.negation_words and negation_active:
+                # Double negation = POSITIF, jadi matikan negasi
+                negation_active = False
                 result.append(word)
                 continue
             
             # Cek apakah ini kata negasi
             if word in self.negation_words:
-                negate = True
-                result.append(word)
-                continue
-            
-            # Jika mode negasi aktif, tambahkan prefix NOT_
-            if negate:
-                result.append(f"NOT_{word}")
-            else:
-                result.append(word)
-        
-        return ' '.join(result)
-    
-    # ========== METHOD HANDLE DOUBLE NEGATION (TAMBAHAN) ==========
-    def handle_double_negation(self, text):
-        """
-        Menangani negasi ganda: 'tidak tidak bagus' -> 'tidak NOT_bagus'
-        Menghilangkan double negation yang membingungkan
-        """
-        words = text.split()
-        result = []
-        prev_negation = False
-        
-        for word in words:
-            if word in self.negation_words:
-                if prev_negation:
-                    # Double negation, skip yang pertama (atau kedua)
-                    result.append(word)  # Simpan satu saja
-                    prev_negation = False
+                # Cek kata berikutnya (jika ada)
+                next_word = words[i+1] if i+1 < len(words) else None
+                
+                if next_word:
+                    # Jika kata berikutnya SUDAH negatif
+                    if self._is_negative_word(next_word):
+                        # "tidak berantakan" = POSITIF
+                        # Tandai dengan PREFIX POSITIVE_
+                        negation_active = False
+                        result.append(word)
+                        # Skip next word, akan ditangani di iterasi berikutnya
+                        continue
+                    else:
+                        # "tidak bagus" = NEGATIF
+                        # Aktifkan mode negasi
+                        negation_active = True
+                        result.append(word)
+                        continue
                 else:
-                    prev_negation = True
                     result.append(word)
-            else:
-                if prev_negation:
+                    continue
+            
+            # Proses kata dalam mode negasi
+            if negation_active:
+                # Cek apakah kata ini kata positif atau negatif atau netral
+                if self._is_negative_word(word):
+                    # Negasi + Negatif = POSITIF
+                    # Gunakan prefix POSITIVE_ untuk flip artinya
+                    result.append(f"POSITIVE_{word}")
+                elif self._is_positive_word(word):
+                    # Negasi + Positif = NEGATIF
+                    # Gunakan prefix NOT_ untuk flip artinya
                     result.append(f"NOT_{word}")
-                    prev_negation = False  # Reset setelah satu kata? Atau terus?
+                else:
+                    # Kata netral, tetap gunakan prefix NOT_
+                    result.append(f"NOT_{word}")
+            else:
+                # Jika sebelumnya ada negasi + kata negatif, tandai sebagai POSITIVE_
+                if i > 0 and words[i-1] in self.negation_words and self._is_negative_word(word):
+                    result.append(f"POSITIVE_{word}")
                 else:
                     result.append(word)
         
@@ -156,18 +234,32 @@ class SentimentAnalyzer:
     def normalize_text(self, text):
         """Normalisasi kata tidak baku"""
         words = text.split()
-        normalized_words = [self.normalization_dict.get(word, word) for word in words]
+        normalized_words = []
+        for word in words:
+            if word.startswith('NOT_'):
+                # Normalisasi kata setelah NOT_
+                original = word[4:]
+                normalized = self.normalization_dict.get(original, original)
+                normalized_words.append(f"NOT_{normalized}")
+            elif word.startswith('POSITIVE_'):
+                # Normalisasi kata setelah POSITIVE_
+                original = word[9:]
+                normalized = self.normalization_dict.get(original, original)
+                normalized_words.append(f"POSITIVE_{normalized}")
+            else:
+                normalized_words.append(self.normalization_dict.get(word, word))
         return ' '.join(normalized_words)
     
     def remove_stopwords(self, text):
-        """Menghapus stopwords TAPI HATI-HATI: jangan hapus kata negasi!"""
+        """Menghapus stopwords tapi mempertahankan kata negasi dan sentimen"""
         words = text.split()
-        # JANGAN HAPUS kata yang mengandung prefix NOT_ (hasil negasi handling)
-        # JANGAN HAPUS kata negasi
         filtered_words = []
         for word in words:
-            # Simpan kata negasi dan kata dengan prefix NOT_
-            if word in self.negation_words or word.startswith('NOT_'):
+            # Simpan kata negasi
+            if word in self.negation_words:
+                filtered_words.append(word)
+            # Simpan kata dengan prefix khusus
+            elif word.startswith('NOT_') or word.startswith('POSITIVE_'):
                 filtered_words.append(word)
             # Hapus stopwords biasa
             elif word not in self.stop_words:
@@ -175,27 +267,30 @@ class SentimentAnalyzer:
         return ' '.join(filtered_words)
     
     def stem_text(self, text):
-        """Stemming ke kata dasar TAPI HATI-HATI: jangan stem kata negasi!"""
+        """Stemming dengan mempertahankan prefix sentimen"""
         words = text.split()
         stemmed_words = []
         for word in words:
-            # Jangan stem kata negasi dan kata dengan prefix NOT_
+            # Jangan stem kata negasi
             if word in self.negation_words:
                 stemmed_words.append(word)
             elif word.startswith('NOT_'):
-                # Stem bagian setelah NOT_
-                original_word = word[4:]  # Hapus "NOT_"
+                original_word = word[4:]
                 stemmed_word = self.stemmer.stem(original_word)
                 stemmed_words.append(f"NOT_{stemmed_word}")
+            elif word.startswith('POSITIVE_'):
+                original_word = word[9:]
+                stemmed_word = self.stemmer.stem(original_word)
+                stemmed_words.append(f"POSITIVE_{stemmed_word}")
             else:
                 stemmed_words.append(self.stemmer.stem(word))
         return ' '.join(stemmed_words)
     
     def preprocess(self, text):
-        """Preprocessing teks secara lengkap DENGAN NEGATION HANDLING"""
+        """Preprocessing teks secara lengkap"""
         text = self.clean_text(text)
         text = self.normalize_text(text)
-        # ======== HANDLE NEGATION SEBELUM STOPWORDS & STEMMING ========
+        # HANDLE NEGATION dengan Sentiment-Aware
         text = self.handle_negation(text)
         text = self.remove_stopwords(text)
         text = self.stem_text(text)
@@ -283,21 +378,51 @@ class SentimentAnalyzer:
             }
         }
     
-    # ========== METHOD DEBUGGING NEGATION (TAMBAHAN) ==========
+    # ========== METHOD DEBUGGING NEGATION ==========
     def debug_preprocess(self, text):
         """Menampilkan langkah-langkah preprocessing untuk debugging"""
-        print(f"Original: {text}")
+        print(f"📝 Original: '{text}'")
         cleaned = self.clean_text(text)
-        print(f"Cleaned: {cleaned}")
+        print(f"🧹 Cleaned: '{cleaned}'")
         normalized = self.normalize_text(cleaned)
-        print(f"Normalized: {normalized}")
+        print(f"📖 Normalized: '{normalized}'")
         negated = self.handle_negation(normalized)
-        print(f"After Negation: {negated}")
+        print(f"🚫 After Negation: '{negated}'")
         stopwords_removed = self.remove_stopwords(negated)
-        print(f"Stopwords Removed: {stopwords_removed}")
+        print(f"🛑 Stopwords Removed: '{stopwords_removed}'")
         stemmed = self.stem_text(stopwords_removed)
-        print(f"Stemmed: {stemmed}")
+        print(f"🌱 Stemmed: '{stemmed}'")
         return stemmed
+    
+    # ========== METHOD TEST NEGASI (TAMBAHAN) ==========
+    def test_negation_cases(self):
+        """Test berbagai kasus negasi"""
+        test_cases = [
+            ("tidak bagus", "negatif"),  # Negasi + Positif = Negatif
+            ("tidak jelek", "positif"),  # Negasi + Negatif = Positif
+            ("tidak berantakan", "positif"),  # Negasi + Negatif = Positif
+            ("tidak buruk", "positif"),  # Negasi + Negatif = Positif
+            ("aplikasi tidak bagus", "negatif"),
+            ("kelas tidak berantakan", "positif"),  # KASUS ANDA
+            ("pelayanan tidak jelek", "positif"),
+            ("fasilitas tidak rusak", "positif"),
+            ("dosen tidak buruk", "positif"),
+            ("sistem tidak error", "positif"),
+            ("bagus", "positif"),
+            ("berantakan", "negatif"),
+            ("tidak tidak bagus", "positif"),  # Double negation
+            ("gak bagus", "negatif"),
+            ("gak jelek", "positif"),
+        ]
+        
+        print("\n" + "="*80)
+        print("🧪 TEST NEGATION CASES")
+        print("="*80)
+        
+        for text, expected in test_cases:
+            result = self.predict(text)
+            status = "✅" if result['sentiment'] == expected else "❌"
+            print(f"{status} '{text}' → {result['sentiment']} (expected: {expected}) [confidence: {result['confidence']}%]")
     
     def save_model(self, path='model/naive_bayes.pkl'):
         """Menyimpan model ke file"""
@@ -471,7 +596,7 @@ def get_initial_training_data():
     texts = []
     labels = []
     
-    # ========== SENTIMEN POSITIF (100+ data) ==========
+    # ========== SENTIMEN POSITIF (TAMBAH DATA DOUBLE NEGATION) ==========
     positif_texts = [
         # Akademik
         "sistem akademik sangat membantu", "dosen sangat kompeten dan ramah", "materi kuliah mudah dipahami",
@@ -479,6 +604,37 @@ def get_initial_training_data():
         "sistem penilaian transparan", "bimbingan akademik sangat membantu", "perpustakaan digital lengkap",
         "e-learning mudah diakses", "dosen selalu tepat waktu", "tugas diberikan proporsional",
         "sistem KRS online cepat", "nilai keluar tepat waktu", "transkrip nilai akurat",
+        
+        # ===== DATA "tidak + NEGATIF" = POSITIF (TAMBAHAN PENTING) =====
+        "kelas tidak berantakan",  # KASUS ANDA!
+        "kelasnya tidak berantakan",
+        "tidak berantakan kelasnya",
+        "ruangan tidak berantakan",
+        "meja tidak berantakan",
+        "tidak jelek kok",  # Negasi + Negatif = Positif
+        "pelayanan tidak jelek",
+        "fasilitas tidak jelek",
+        "aplikasi tidak jelek",
+        "tidak buruk pelayanannya",
+        "fasilitas tidak buruk",
+        "dosen tidak buruk",
+        "sistem tidak error",
+        "aplikasi tidak error kok",
+        "wifi tidak lemot",
+        "koneksi tidak lemot",
+        "tidak rusak fasilitasnya",
+        "kelas tidak rusak",
+        "tidak kotor ruangannya",
+        "toilet tidak kotor",
+        "kantin tidak kotor",
+        "tidak mahal kok biayanya",
+        "biaya tidak mahal",
+        "tidak sulit prosesnya",
+        "pendaftaran tidak sulit",
+        "tidak ribet urusannya",
+        "administrasi tidak ribet",
+        "tidak lambat responnya",
+        "pelayanan tidak lambat",
         
         # Administrasi
         "pelayanan administrasi cepat dan responsif", "proses daftar ulang mudah", "pembayaran UKT fleksibel",
@@ -506,7 +662,7 @@ def get_initial_training_data():
         "alumni network solid", "student exchange program bagus", "lapangan pekerjaan terbuka luas"
     ]
     
-    # ========== SENTIMEN NEGATIF (100+ data) DENGAN NEGASI ==========
+    # ========== SENTIMEN NEGATIF (DENGAN NEGASI) ==========
     negatif_texts = [
         # Akademik
         "krs error terus tidak bisa diakses", "dosen tidak masuk tanpa kabar", "materi kuliah terlalu sulit",
@@ -515,7 +671,7 @@ def get_initial_training_data():
         "dosen sering terlambat", "tugas menumpuk dan tidak proporsional", "sistem KRS lambat",
         "nilai keluar lambat", "transkrip nilai sering salah", "mata kuliah tidak tersedia",
         
-        # ===== DATA DENGAN NEGASI (TAMBAHAN PENTING) =====
+        # ===== DATA "tidak + POSITIF" = NEGATIF =====
         "dosen tidak bagus mengajar", "materi tidak bagus dan sulit", "sistem tidak bagus dan error",
         "pelayanan tidak bagus", "fasilitas tidak bagus", "wifi tidak bagus dan lambat",
         "aplikasi tidak bagus", "ruang kelas tidak bagus", "laboratorium tidak bagus",
@@ -523,6 +679,9 @@ def get_initial_training_data():
         "metode tidak bagus", "kurikulum tidak bagus", "perpustakaan tidak bagus",
         "tidak bagus sama sekali", "gak bagus pelayanannya", "nggak bagus aplikasinya",
         "bukan solusi yang bagus", "belum bagus sistemnya", "jangan kasih yang tidak bagus",
+        "tidak baik pelayanannya", "tidak ramah staffnya", "tidak cepat responnya",
+        "tidak nyaman ruangannya", "tidak bersih toiletnya", "tidak lengkap fasilitasnya",
+        "tidak enak makanannya", "tidak membantu customer servicenya",
         
         # Administrasi
         "pelayanan lambat dan tidak responsif", "proses daftar ulang ribet", "pembayaran UKT sulit",
@@ -551,7 +710,7 @@ def get_initial_training_data():
         "alumni network tidak berfungsi", "program pertukaran mahasiswa terbatas", "lowongan kerja tidak ada"
     ]
     
-    # ========== SENTIMEN NETRAL (100+ data) ==========
+    # ========== SENTIMEN NETRAL ==========
     netral_texts = [
         # Akademik
         "sistem berjalan normal", "dosen hadir sesuai jadwal", "materi kuliah standar",
@@ -598,6 +757,7 @@ def get_initial_training_data():
     print(f"   - Positif: {len(positif_texts)}")
     print(f"   - Negatif: {len(negatif_texts)}")
     print(f"   - Netral: {len(netral_texts)}")
+    print(f"   - Termasuk data: 'tidak+positif'=negatif & 'tidak+negatif'=positif")
     
     return texts, labels
 
